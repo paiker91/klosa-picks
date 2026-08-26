@@ -1,0 +1,104 @@
+name: Capturar cierres y resultados
+
+# Cada dos horas. Las instantáneas del proveedor tienen granularidad de
+# minutos, así que un desfase de hasta dos horas no cambia el cierre: se pide
+# el instante exacto del comienzo del partido, no "ahora".
+on:
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+
+# Solo lo justo para poder empujar los cierres capturados.
+permissions:
+  contents: write
+
+concurrency:
+  group: captura
+  cancel-in-progress: false
+
+jobs:
+  capturar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el registro
+        uses: actions/checkout@v4
+        with:
+          path: registro
+
+      # El código de captura vive en el repositorio del producto. Aquí solo
+      # se ejecuta: este repositorio contiene datos, no lógica.
+      - name: Descargar el código de Klosa
+        uses: actions/checkout@v4
+        with:
+          repository: paiker91/klosa
+          path: klosa
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: klosa/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: klosa
+        run: npm ci
+
+      - name: Capturar cierres y resultados
+        id: captura
+        working-directory: klosa
+        env:
+          THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+          KLOSA_PICKS_DIR: ${{ github.workspace }}/registro
+          # Los picks de los usuarios viven en la base de datos. La clave de
+          # servicio se salta las políticas de fila, así que solo puede estar
+          # aquí: nunca en Vercel ni en nada que llegue al navegador. Es la
+          # razón por la que las tablas de cierres y resultados no tienen
+          # política de escritura — que un usuario pudiera escribir su propia
+          # línea de cierre vaciaría de sentido el producto entero.
+          #
+          # Si el secreto no está puesto, el trabajo sigue haciendo su parte
+          # del registro público y lo dice en el log. No revienta.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: npx tsx scripts/capturar-cierres.ts
+
+      # El commit lo firma la Action, no una persona. Esa es la gracia: quien
+      # audite el registro ve que los cierres los anotó un proceso automático
+      # y no el mismo que hace los pronósticos.
+      - name: Sellar lo capturado
+        working-directory: registro
+        run: |
+          # --porcelain y no "git diff": resultados.jsonl nace sin seguimiento
+          # la primera vez, y un diff sobre un fichero nuevo no dice nada.
+          if [ -z "$(git status --porcelain -- cierres.jsonl resultados.jsonl renuncias.jsonl)" ]; then
+            echo "Nada nuevo que sellar."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Uno por uno: git add revienta si le nombras un fichero que aún
+          # no existe, y resultados.jsonl no existe hasta la primera captura.
+          for f in cierres.jsonl resultados.jsonl renuncias.jsonl; do
+            [ -f "$f" ] && git add "$f"
+          done
+          git commit -m "captura automática: cierres y resultados
+
+          Ejecutado por GitHub Actions contra el proveedor de cuotas.
+          Ninguna persona ha intervenido en estos valores."
+          git push
+
+      # Va al final y en su propio paso a propósito: si esto fallara antes, se
+      # perdería el commit de la captura, que es justo lo que hay que proteger.
+      # Fallar aquí solo sirve para que GitHub mande un correo — la vez
+      # anterior el gasto se descubrió de casualidad y ya se había ido media
+      # clave.
+      - name: Avisar si queda poca cuota
+        if: always() && steps.captura.outputs.restante != ''
+        run: |
+          restante="${{ steps.captura.outputs.restante }}"
+          alarma="${{ steps.captura.outputs.alarma }}"
+          echo "Cuota del proveedor: $restante (alarma por debajo de $alarma)."
+          if [ "$restante" -lt "$alarma" ]; then
+            echo "::error::Quedan $restante peticiones. Renueva la clave o baja la frecuencia."
+            exit 1
+          fi
