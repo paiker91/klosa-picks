@@ -5,6 +5,11 @@ name: Capturar cierres y resultados
 # el instante exacto del comienzo del partido, no "ahora".
 on:
   schedule:
+    # Cada dos horas, al minuto 17. Si el robot deja de correr sin que nadie
+    # lo haya tocado, sospechar del historial: el 2026-08-27 el cron se paro
+    # solo tras reescribirse el repositorio (force-push huerfano el dia
+    # anterior), con el workflow en estado "active" y sin ningun error. Volver
+    # a commitear ESTE fichero fue lo que lo re-registro.
     - cron: '17 */2 * * *'
   workflow_dispatch:
 
