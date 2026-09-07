@@ -53,6 +53,10 @@ jobs:
         working-directory: klosa
         env:
           THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+          # Segundo proveedor. Cada pick se cierra con el que lo abrió, y basta
+          # con que haya uno: cuando la clave de The Odds API se desactivo, los
+          # picks nuevos siguieron capturandose con normalidad.
+          ODDSPAPI_KEY: ${{ secrets.ODDSPAPI_KEY }}
           KLOSA_PICKS_DIR: ${{ github.workspace }}/registro
           # Los picks de los usuarios viven en la base de datos. La clave de
           # servicio se salta las políticas de fila, así que solo puede estar
